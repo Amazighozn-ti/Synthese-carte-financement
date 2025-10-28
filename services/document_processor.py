@@ -156,14 +156,17 @@ class DocumentProcessor:
                 model=self.ocr_model
             )
 
-            # Extraire le texte de la réponse
+            # Extraire le texte propre de la réponse
             if hasattr(image_response, 'pages') and image_response.pages:
                 text = ""
                 for page in image_response.pages:
-                    if hasattr(page, 'markdown'):
-                        text += page.markdown + "\n"
-                    elif hasattr(page, 'text'):
+                    if hasattr(page, 'text'):
+                        # Utiliser .text pour obtenir le texte brut sans formatage
                         text += page.text + "\n"
+                    elif hasattr(page, 'markdown'):
+                        # Fallback: nettoyer le markdown pour extraire uniquement le texte
+                        clean_text = self._clean_markdown_text(page.markdown)
+                        text += clean_text + "\n"
                 return text
             else:
                 # Parser la réponse JSON si structure différente
@@ -171,10 +174,13 @@ class DocumentProcessor:
                 if 'pages' in response_dict:
                     text = ""
                     for page in response_dict['pages']:
-                        if 'markdown' in page:
-                            text += page['markdown'] + "\n"
-                        elif 'text' in page:
+                        if 'text' in page:
+                            # Utiliser le texte brut si disponible
                             text += page['text'] + "\n"
+                        elif 'markdown' in page:
+                            # Nettoyer le markdown pour extraire le texte propre
+                            clean_text = self._clean_markdown_text(page['markdown'])
+                            text += clean_text + "\n"
                     return text
 
             return ""
@@ -183,6 +189,45 @@ class DocumentProcessor:
             print(f"Erreur avec Mistral OCR: {e}")
             # Retourner chaîne vide si Mistral OCR échoue
             return ""
+
+    def _clean_markdown_text(self, markdown_text: str) -> str:
+        """
+        Nettoyer le texte markdown pour extraire uniquement le texte brut
+
+        Args:
+            markdown_text: Texte au format markdown
+
+        Returns:
+            str: Texte brut propre
+        """
+        import re
+
+        # Supprimer les images markdown ![...](...)
+        markdown_text = re.sub(r'!\[.*?\]\(.*?\)', '', markdown_text)
+
+        # Supprimer les URLs [](http://...)
+        markdown_text = re.sub(r'\[.*?\]\(.*?\)', '', markdown_text)
+
+        # Supprimer les images HTML <img>
+        markdown_text = re.sub(r'<img[^>]*>', '', markdown_text)
+
+        # Nettoyer les tableaux markdown - garder le contenu mais supprimer le formatage
+        lines = markdown_text.split('\n')
+        clean_lines = []
+        for line in lines:
+            # Supprimer les lignes de séparation de tableaux
+            if line.strip().startswith('|---') or line.strip() == '|':
+                continue
+            # Supprimer les pipes des tableaux mais garder le texte
+            line = re.sub(r'\|', ' ', line)
+            clean_lines.append(line)
+
+        # Joindre et nettoyer les espaces multiples
+        text = ' '.join(clean_lines)
+        text = re.sub(r'\s+', ' ', text)  # Remplacer les espaces multiples par un seul
+        text = text.strip()
+
+        return text
 
     def is_pdf_scanned(self, file_path: str) -> bool:
         """

@@ -95,13 +95,15 @@ async def upload_document(file: UploadFile = File(...)):
         classification_result = await llm_classifier.classify_document(extracted_text)
 
         # Sauvegarder en base de données
+        # Adapter le format pour la base de données (compatibilité ascendante)
+        classification_data = classification_result.get("classification", classification_result)
         document_id = insert_document(
             filename=file.filename,
             file_path=file_path,
             extracted_text=extracted_text,
-            detected_type=classification_result["document_type"],
-            detected_category=classification_result["category"],
-            confidence=classification_result["confidence"]
+            detected_type=classification_data.get("document_type"),
+            detected_category=classification_data.get("category"),
+            confidence=classification_data.get("confidence")
         )
 
         return JSONResponse(content={

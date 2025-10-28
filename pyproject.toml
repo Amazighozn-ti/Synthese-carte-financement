@@ -1,15 +1,19 @@
 [project]
 name = "synthese-carte-financement"
 version = "0.1.0"
-description = "Add your description here"
+description = "Document classification API using OCR and Mistral LLM with LangChain"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.120.1",
+    "langchain>=1.0.2",
+    "langchain-mistralai>=1.0.1",
+    "langchain-core>=1.0.1",
     "mistralai>=1.9.11",
     "pdf2image>=1.17.0",
     "pdfminer-six>=20250506",
     "pillow>=12.0.0",
+    "pydantic>=2.12.3",
     "pypdf2>=3.0.1",
     "python-dotenv>=1.2.1",
     "python-multipart>=0.0.20",
