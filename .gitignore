@@ -8,3 +8,25 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Environment variables
+.env
+
+# Database files
+*.db
+documents.db
+
+# Uploads folder
+uploads/
+
+# UV lock file
+uv.lock
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log

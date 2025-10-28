@@ -4,4 +4,14 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastapi>=0.120.1",
+    "mistralai>=1.9.11",
+    "pdf2image>=1.17.0",
+    "pdfminer-six>=20250506",
+    "pillow>=12.0.0",
+    "pypdf2>=3.0.1",
+    "python-dotenv>=1.2.1",
+    "python-multipart>=0.0.20",
+    "uvicorn>=0.38.0",
+]
