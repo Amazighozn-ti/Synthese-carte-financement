@@ -106,12 +106,21 @@ async def upload_document(file: UploadFile = File(...)):
             confidence=classification_data.get("confidence")
         )
 
+        # Supprimer le fichier après traitement si configuré
+        message = "Document traité avec succès"
+        if config.DELETE_AFTER_PROCESSING:
+            try:
+                os.remove(file_path)
+                message += " (fichier supprimé automatiquement)"
+            except Exception as e:
+                print(f"Erreur lors de la suppression du fichier {file_path}: {e}")
+
         return JSONResponse(content={
             "success": True,
             "document_id": document_id,
             "filename": file.filename,
             "classification": classification_result,
-            "message": "Document traité avec succès"
+            "message": message
         })
 
     except HTTPException as he:
@@ -193,4 +202,4 @@ async def get_stats():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=config.API_HOST, port=config.API_PORT, debug=config.DEBUG)
+    uvicorn.run(app, host=config.API_HOST, port=config.API_PORT, reload=config.DEBUG)

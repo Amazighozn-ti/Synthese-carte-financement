@@ -28,6 +28,9 @@ class Config:
     UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "uploads")
     MAX_FILE_SIZE: int = int(os.getenv("MAX_FILE_SIZE", "50")) * 1024 * 1024  # 50MB par défaut
 
+    # Suppression automatique des fichiers après traitement
+    DELETE_AFTER_PROCESSING: bool = os.getenv("DELETE_AFTER_PROCESSING", "true").lower() == "true"
+
     # Types de fichiers supportés
     SUPPORTED_EXTENSIONS: list = ['.pdf', '.png', '.jpg', '.jpeg', '.tiff', '.bmp']
 

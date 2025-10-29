@@ -35,16 +35,19 @@ class LLMClassifier:
         # Créer le template de prompt structuré
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", """Tu es un expert en classification de documents administratifs et financiers français.
-Analyse attentivement le texte fourni et identifie le type de document parmi les 40 types prédéfinis.
+Analyse attentivement le texte fourni et identifie LE TYPE EXACT parmi la liste fournie.
+
+IMPORTANT: Tu dois OBLIGATOIREMENT choisir un type de document dans la liste exacte fournie. Ne propose jamais un type qui n'est pas dans cette liste.
+Si aucun type ne correspond parfaitement, choisis "Autre" dans la catégorie appropriée.
 
 Sois précis et cohérent dans ta classification et fournis un score de confiance réaliste (0.0 à 1.0)."""),
             ("user", """Texte à analyser:
 {text}
 
-Types de documents possibles:
+Types de documents disponibles (CHOISIR OBLIGATOIREMENT DANS CETTE LISTE):
 {document_types}
 
-Identifie le type de document correspondant.""")
+Identifie le type de document EXACT qui correspond le mieux.""")
         ])
 
         # Créer la chaîne avec sortie structurée
@@ -114,8 +117,16 @@ Identifie le type de document correspondant.""")
                 "document_types": document_types_str
             })
 
-            # Valider et corriger le résultat
-            result = self._validate_and_correct_result(result)
+            # Valider que le type est bien dans la liste (juste pour vérification)
+            if result.document_type not in self.document_types:
+                logger.warning(f"❌ Le LLM a proposé un type non valide: {result.document_type}")
+                # Chercher le "Autre" approprié
+                for doc_type in self.document_types:
+                    if "autre" in doc_type.lower():
+                        result.document_type = doc_type
+                        result.category = self.categories.get(doc_type, "Autre")
+                        break
+
             processing_time = (datetime.now() - start_time).total_seconds()
 
             logger.info(f"✅ Classification réussie: {result.document_type} ({result.confidence:.2f})")
@@ -191,6 +202,11 @@ Identifie le type de document correspondant.""")
             if document_type_lower in doc_type.lower() or doc_type.lower() in document_type_lower:
                 return doc_type
 
+        # Si rien trouvé, chercher "Autre" dans les types disponibles
+        for doc_type in self.document_types:
+            if "autre" in doc_type.lower():
+                return doc_type
+
         # Si rien trouvé, retourner le premier type comme fallback
         return self.document_types[0] if self.document_types else "Document non identifié"
 
@@ -204,26 +220,32 @@ Identifie le type de document correspondant.""")
         Returns:
             Dict: Résultat de classification basique
         """
-        # Fallback simple - on essaie juste de voir si certains mots clés évidents sont présents
+        # Fallback simple - recherche par mots-clés dans les types de documents disponibles
         text_lower = text.lower()
 
-        # Types simples avec mots-clés évidents
-        fallback_mapping = {
-            "kbis": "KBIS société emprunteur",
-            "compromis": "Compromis de vente",
-            "bail": "Bail ou projet de bail du bien objet de l'acquisition",
-            "statuts": "Statuts société emprunteur",
-            "diagnostic": "Diagnostic de performance énergétique",
-            "cv": "CV(s) du(des) associé(s)"
-        }
+        # Chercher une correspondance directe avec les types disponibles
+        for doc_type in self.document_types:
+            doc_type_lower = doc_type.lower()
+            # Extraire les mots-clés du type de document
+            keywords = doc_type_lower.split()
+            for keyword in keywords:
+                if len(keyword) > 3 and keyword in text_lower:  # Éviter les mots trop courts
+                    result = DocumentClassification(
+                        document_type=doc_type,
+                        category=self.categories.get(doc_type, "Autre"),
+                        confidence=0.3,  # Confiance faible pour le fallback
+                        reasoning=f"Classification de secours par mot-clé: '{keyword}'"
+                    )
+                    return result.model_dump()
 
-        for keyword, doc_type in fallback_mapping.items():
-            if keyword in text_lower and doc_type in self.document_types:
+        # Chercher "Autre" comme fallback
+        for doc_type in self.document_types:
+            if "autre" in doc_type.lower():
                 result = DocumentClassification(
                     document_type=doc_type,
                     category=self.categories.get(doc_type, "Autre"),
-                    confidence=0.3,  # Confiance faible pour le fallback
-                    reasoning="Classification de secours par mot-clé"
+                    confidence=0.2,
+                    reasoning="Classification de secours: Autre"
                 )
                 return result.model_dump()
 
