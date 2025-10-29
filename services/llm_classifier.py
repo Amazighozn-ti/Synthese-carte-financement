@@ -3,7 +3,8 @@ Service de classification de documents avec LangChain et Mistral LLM
 """
 
 import os
-from typing import Dict, List
+import json
+from typing import Dict, List, Optional
 import logging
 from datetime import datetime
 
@@ -284,3 +285,186 @@ Identifie le type de document EXACT qui correspond le mieux.""")
         """
         logger.info("🔄 Rechargement des types de documents depuis la base de données...")
         self._load_document_types_from_db()
+
+    async def extract_document_data(self, text: str, document_type: str) -> Dict[str, any]:
+        """
+        Extraire les données structurées d'un document en utilisant le prompt d'extraction approprié
+
+        Args:
+            text: Texte extrait du document
+            document_type: Type de document détecté
+
+        Returns:
+            Dict: Résultat d'extraction avec données structurées et confiance
+        """
+        start_time = datetime.now()
+
+        try:
+            # Récupérer le prompt d'extraction depuis la base de données
+            from database import get_extraction_prompt
+            extraction_prompt = get_extraction_prompt(document_type)
+
+            if not extraction_prompt:
+                logger.warning(f"Pas de prompt d'extraction trouvé pour le type: {document_type}")
+                return {
+                    "success": False,
+                    "error": f"Pas de prompt d'extraction trouvé pour: {document_type}",
+                    "extracted_data": None,
+                    "confidence": 0.0,
+                    "processing_time": (datetime.now() - start_time).total_seconds()
+                }
+
+            # Créer un nouveau prompt template pour l'extraction
+            extraction_template = ChatPromptTemplate.from_messages([
+                ("system", extraction_prompt),
+                ("user", """Voici le texte du document à analyser:
+
+{text}
+
+Analyse ce document et extrait les informations demandées en retournant UNIQUEMENT un JSON valide avec les champs spécifiés.
+Important:
+- Retourne UNIQUEMENT le JSON, sans autre texte
+- Si une information n'est pas trouvée, mets "Non spécifié" comme valeur
+- Structure clairement les données hiérarchiques si nécessaire""")
+            ])
+
+            # Créer la chaîne d'extraction
+            if not self.llm:
+                logger.error("LLM non initialisé pour l'extraction")
+                return {
+                    "success": False,
+                    "error": "LLM non initialisé",
+                    "extracted_data": None,
+                    "confidence": 0.0,
+                    "processing_time": (datetime.now() - start_time).total_seconds()
+                }
+
+            extraction_chain = extraction_template | self.llm
+
+            # Limiter la longueur du texte
+            truncated_text = text[:12000]  # Limite plus grande pour l'extraction
+
+            logger.info(f"🔍 Extraction des données pour: {document_type}")
+
+            # Invoquer le LLM pour l'extraction
+            response = await extraction_chain.ainvoke({
+                "text": truncated_text
+            })
+
+            # Extraire le contenu de la réponse
+            content = response.content
+
+            # Tenter de parser le JSON
+            try:
+                # Nettoyer la réponse pour obtenir un JSON pur
+                content = content.strip()
+                if content.startswith("```json"):
+                    content = content[7:]
+                if content.endswith("```"):
+                    content = content[:-3]
+                content = content.strip()
+
+                # Parser le JSON
+                extracted_data = json.loads(content)
+
+                # Créer un résultat structuré
+                result = {
+                    "document_type": document_type,
+                    "extracted_fields": extracted_data,
+                    "extraction_timestamp": datetime.now().isoformat()
+                }
+
+                processing_time = (datetime.now() - start_time).total_seconds()
+                logger.info(f"✅ Extraction réussie pour: {document_type}")
+
+                return {
+                    "success": True,
+                    "extracted_data": json.dumps(result),
+                    "confidence": 0.8,  # Confiance par défaut pour l'extraction
+                    "processing_time": processing_time,
+                    "llm_used": "mistral-large-latest"
+                }
+
+            except json.JSONDecodeError as e:
+                logger.error(f"❌ Erreur parsing JSON extraction: {e}")
+                logger.error(f"Contenu reçu: {content[:200]}...")
+
+                # Fallback: tenter d'extraire manuellement
+                fallback_data = {
+                    "document_type": document_type,
+                    "raw_response": content,
+                    "extraction_timestamp": datetime.now().isoformat(),
+                    "parsing_error": str(e)
+                }
+
+                return {
+                    "success": False,
+                    "error": f"Erreur parsing JSON: {str(e)}",
+                    "extracted_data": json.dumps(fallback_data),
+                    "confidence": 0.2,
+                    "processing_time": (datetime.now() - start_time).total_seconds(),
+                    "llm_used": "mistral-large-latest"
+                }
+
+        except Exception as e:
+            logger.error(f"❌ Erreur lors de l'extraction: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "extracted_data": None,
+                "confidence": 0.0,
+                "processing_time": (datetime.now() - start_time).total_seconds()
+            }
+
+    async def process_document_complete(self, text: str) -> Dict[str, any]:
+        """
+        Pipeline complet de traitement : classification puis extraction
+
+        Args:
+            text: Texte extrait du document
+
+        Returns:
+            Dict: Résultat complet avec classification et extraction
+        """
+        logger.info("🚀 Démarrage du pipeline complet de traitement")
+        total_start_time = datetime.now()
+
+        # Étape 1: Classification
+        logger.info("📍 Étape 1/2: Classification du document")
+        classification_result = await self.classify_document(text)
+
+        if not classification_result.get("success", False):
+            logger.error("❌ Échec de la classification, extraction annulée")
+            return {
+                "success": False,
+                "error": "Échec de la classification",
+                "classification": classification_result,
+                "extraction": None,
+                "total_processing_time": (datetime.now() - total_start_time).total_seconds()
+            }
+
+        document_type = classification_result["classification"]["document_type"]
+        logger.info(f"✅ Document classifié comme: {document_type}")
+
+        # Étape 2: Extraction
+        logger.info("📍 Étape 2/2: Extraction des données structurées")
+        extraction_result = await self.extract_document_data(text, document_type)
+
+        total_processing_time = (datetime.now() - total_start_time).total_seconds()
+
+        # Résultat complet
+        complete_result = {
+            "success": extraction_result.get("success", False),
+            "classification": classification_result,
+            "extraction": extraction_result,
+            "total_processing_time": total_processing_time,
+            "document_type": document_type,
+            "confidence": classification_result["classification"]["confidence"]
+        }
+
+        if extraction_result.get("success"):
+            logger.info(f"✅ Pipeline complet terminé avec succès en {total_processing_time:.2f}s")
+        else:
+            logger.warning(f"⚠️ Pipeline terminé avec erreurs en {total_processing_time:.2f}s")
+
+        return complete_result

@@ -91,12 +91,12 @@ async def upload_document(file: UploadFile = File(...)):
             os.remove(file_path)  # Nettoyer le fichier
             raise HTTPException(status_code=400, detail="Impossible d'extraire le texte du document")
 
-        # Classifier le document avec le LLM
-        classification_result = await llm_classifier.classify_document(extracted_text)
+        # Pipeline complet de traitement : classification + extraction
+        processing_result = await llm_classifier.process_document_complete(extracted_text)
 
         # Sauvegarder en base de données
         # Adapter le format pour la base de données (compatibilité ascendante)
-        classification_data = classification_result.get("classification", classification_result)
+        classification_data = processing_result.get("classification", {}).get("classification", {})
         document_id = insert_document(
             filename=file.filename,
             file_path=file_path,
@@ -105,6 +105,21 @@ async def upload_document(file: UploadFile = File(...)):
             detected_category=classification_data.get("category"),
             confidence=classification_data.get("confidence")
         )
+
+        # Sauvegarder les résultats d'extraction si disponibles
+        extraction_data = processing_result.get("extraction")
+        if extraction_data and extraction_data.get("success"):
+            try:
+                from database import insert_document_extraction
+                insert_document_extraction(
+                    document_id=document_id,
+                    extracted_data=extraction_data.get("extracted_data"),
+                    llm_used=extraction_data.get("llm_used", "mistral-large-latest"),
+                    confidence=extraction_data.get("confidence", 0.0)
+                )
+            except Exception as e:
+                print(f"Erreur lors de la sauvegarde de l'extraction: {e}")
+                # Ne pas échouer le traitement si l'extraction ne sauvegarde pas
 
         # Supprimer le fichier après traitement si configuré
         message = "Document traité avec succès"
@@ -119,7 +134,7 @@ async def upload_document(file: UploadFile = File(...)):
             "success": True,
             "document_id": document_id,
             "filename": file.filename,
-            "classification": classification_result,
+            "processing_result": processing_result,
             "message": message
         })
 
@@ -139,11 +154,19 @@ async def list_documents():
 
 @app.get("/documents/{document_id}")
 async def get_document(document_id: int):
-    """Récupérer un document spécifique par son ID"""
+    """Récupérer un document spécifique par son ID avec ses extractions"""
     documents = get_documents(document_id)
     if not documents:
         raise HTTPException(status_code=404, detail="Document non trouvé")
-    return {"document": documents[0]}
+
+    # Récupérer les extractions associées
+    from database import get_document_extractions
+    extractions = get_document_extractions(document_id)
+
+    return {
+        "document": documents[0],
+        "extractions": extractions
+    }
 
 @app.delete("/documents/{document_id}")
 async def delete_document(document_id: int):
@@ -162,6 +185,21 @@ async def get_document_types():
     from database import get_document_types as db_get_document_types
 
     return {"document_types": db_get_document_types()}
+
+@app.get("/extraction-prompts")
+async def get_extraction_prompts():
+    """Lister tous les prompts d'extraction disponibles"""
+    from database import get_extraction_prompts
+
+    return {"extraction_prompts": get_extraction_prompts()}
+
+@app.get("/extractions")
+async def get_extractions(document_id: int = None):
+    """Récupérer les extractions de documents"""
+    from database import get_document_extractions
+
+    extractions = get_document_extractions(document_id)
+    return {"extractions": extractions}
 
 @app.get("/stats")
 async def get_stats():
