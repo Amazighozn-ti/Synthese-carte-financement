@@ -69,6 +69,31 @@ def init_database():
             )
         ''')
 
+        # Table des synthèses de financement
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS syntheses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dossier_id TEXT NOT NULL,
+                input_documents TEXT NOT NULL,
+                synthese_text TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Table des documents générés
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS documents_generes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dossier_id TEXT NOT NULL,
+                type_document TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                generated_from TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         # Insérer les types de documents prédéfinis
         document_types = [
             (1, "CV(s) du(des) associés", "Associés"),
@@ -490,6 +515,241 @@ def update_extraction_prompt(document_type: str, extraction_prompt: str) -> bool
 
     except sqlite3.Error as e:
         print(f"Erreur lors de la mise à jour du prompt d'extraction: {e}")
+        conn.rollback()
+        return False
+    finally:
+        conn.close()
+
+def insert_synthese(dossier_id: str, input_documents: str, synthese_text: str, confidence: float) -> int:
+    """
+    Insérer une nouvelle synthèse de financement
+
+    Args:
+        dossier_id: Identifiant du dossier
+        input_documents: JSON des documents utilisés
+        synthese_text: Texte de la synthèse générée
+        confidence: Score de confiance
+
+    Returns:
+        int: ID de la synthèse insérée
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            INSERT INTO syntheses (dossier_id, input_documents, synthese_text, confidence)
+            VALUES (?, ?, ?, ?)
+        ''', (dossier_id, input_documents, synthese_text, confidence))
+
+        synthese_id = cursor.lastrowid
+        conn.commit()
+        return synthese_id
+
+    except sqlite3.Error as e:
+        print(f"Erreur lors de l'insertion de la synthèse: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+def get_syntheses(dossier_id: Optional[str] = None) -> List[Dict]:
+    """
+    Récupérer les synthèses de financement
+
+    Args:
+        dossier_id: ID spécifique du dossier (None pour toutes)
+
+    Returns:
+        List[Dict]: Liste des synthèses
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        if dossier_id:
+            cursor.execute('''
+                SELECT * FROM syntheses WHERE dossier_id = ?
+                ORDER BY created_at DESC
+            ''', (dossier_id,))
+        else:
+            cursor.execute('''
+                SELECT * FROM syntheses ORDER BY created_at DESC
+            ''')
+
+        results = cursor.fetchall()
+        return [dict(row) for row in results]
+
+    except sqlite3.Error as e:
+        print(f"Erreur lors de la récupération des synthèses: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_documents_with_extractions(document_ids: List[int]) -> List[Dict]:
+    """
+    Récupérer les documents avec leurs données d'extraction
+
+    Args:
+        document_ids: Liste des IDs de documents
+
+    Returns:
+        List[Dict]: Liste des documents avec leurs extractions
+    """
+    if not document_ids:
+        return []
+
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        placeholders = ','.join(['?' for _ in document_ids])
+        cursor.execute(f'''
+            SELECT d.id, d.filename, d.detected_type, d.detected_category, d.confidence,
+                   d.created_at, de.extracted_data, de.llm_used, de.confidence as extraction_confidence
+            FROM documents d
+            LEFT JOIN document_extractions de ON d.id = de.document_id
+            WHERE d.id IN ({placeholders})
+            ORDER BY d.detected_category, d.detected_type
+        ''', document_ids)
+
+        results = cursor.fetchall()
+        documents = []
+
+        for row in results:
+            doc = dict(row)
+            # Parser le JSON des données extraites si disponible
+            if doc['extracted_data']:
+                try:
+                    import json
+                    doc['extracted_data'] = json.loads(doc['extracted_data'])
+                except:
+                    doc['extracted_data'] = None
+            documents.append(doc)
+
+        return documents
+
+    except sqlite3.Error as e:
+        print(f"Erreur lors de la récupération des documents avec extractions: {e}")
+        return []
+    finally:
+        conn.close()
+
+def insert_document_genere(dossier_id: str, type_document: str, file_path: str,
+                          file_name: str, generated_from: str) -> int:
+    """
+    Insérer un nouveau document généré
+
+    Args:
+        dossier_id: Identifiant du dossier lié
+        type_document: Type de document (ex: "Carte de Financement (.docx)")
+        file_path: Chemin du fichier généré
+        file_name: Nom du fichier
+        generated_from: Source de génération (synthèse JSON)
+
+    Returns:
+        int: ID du document généré inséré
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            INSERT INTO documents_generes (dossier_id, type_document, file_path, file_name, generated_from)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (dossier_id, type_document, file_path, file_name, generated_from))
+
+        document_id = cursor.lastrowid
+        conn.commit()
+        return document_id
+
+    except sqlite3.Error as e:
+        print(f"Erreur lors de l'insertion du document généré: {e}")
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+def get_document_genere(document_id: int) -> Optional[Dict]:
+    """
+    Récupérer un document généré par son ID
+
+    Args:
+        document_id: ID du document généré
+
+    Returns:
+        Optional[Dict]: Document généré ou None si non trouvé
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('''
+            SELECT * FROM documents_generes WHERE id = ?
+        ''', (document_id,))
+        result = cursor.fetchone()
+        return dict(result) if result else None
+
+    except sqlite3.Error as e:
+        print(f"Erreur lors de la récupération du document généré: {e}")
+        return None
+    finally:
+        conn.close()
+
+def get_documents_generes(dossier_id: Optional[str] = None) -> List[Dict]:
+    """
+    Récupérer les documents générés
+
+    Args:
+        dossier_id: ID spécifique du dossier (None pour tous)
+
+    Returns:
+        List[Dict]: Liste des documents générés
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        if dossier_id:
+            cursor.execute('''
+                SELECT * FROM documents_generes WHERE dossier_id = ?
+                ORDER BY created_at DESC
+            ''', (dossier_id,))
+        else:
+            cursor.execute('''
+                SELECT * FROM documents_generes ORDER BY created_at DESC
+            ''')
+
+        results = cursor.fetchall()
+        return [dict(row) for row in results]
+
+    except sqlite3.Error as e:
+        print(f"Erreur lors de la récupération des documents générés: {e}")
+        return []
+    finally:
+        conn.close()
+
+def delete_document_genere(document_id: int) -> bool:
+    """
+    Supprimer un document généré
+
+    Args:
+        document_id: ID du document généré à supprimer
+
+    Returns:
+        bool: True si la suppression a réussi
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute('DELETE FROM documents_generes WHERE id = ?', (document_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        return success
+
+    except sqlite3.Error as e:
+        print(f"Erreur lors de la suppression du document généré: {e}")
         conn.rollback()
         return False
     finally:

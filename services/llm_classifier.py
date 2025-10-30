@@ -11,7 +11,10 @@ from datetime import datetime
 from langchain_mistralai import ChatMistralAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.exceptions import OutputParserException
-from models.schemas import DocumentClassification, ClassificationResult
+from models.schemas import (
+    DocumentClassification, ClassificationResult,
+    EXTRACTION_MODELS, ExtractionGenerale
+)
 
 # Configuration du logging
 logging.basicConfig(level=logging.INFO)
@@ -29,7 +32,7 @@ class LLMClassifier:
         # Initialiser le modèle LangChain avec Mistral
         self.llm = ChatMistralAI(
             api_key=self.api_key,
-            model="mistral-large-latest",
+            model="magistral-medium-latest",
             temperature=0.1  # Température basse pour plus de cohérence
         ) if self.api_key else None
 
@@ -288,7 +291,7 @@ Identifie le type de document EXACT qui correspond le mieux.""")
 
     async def extract_document_data(self, text: str, document_type: str) -> Dict[str, any]:
         """
-        Extraire les données structurées d'un document en utilisant le prompt d'extraction approprié
+        Extraire les données structurées d'un document en utilisant Pydantic et LangChain
 
         Args:
             text: Texte extrait du document
@@ -300,35 +303,27 @@ Identifie le type de document EXACT qui correspond le mieux.""")
         start_time = datetime.now()
 
         try:
-            # Récupérer le prompt d'extraction depuis la base de données
-            from database import get_extraction_prompt
-            extraction_prompt = get_extraction_prompt(document_type)
+            # Récupérer le modèle Pydantic approprié pour ce type de document
+            extraction_model = EXTRACTION_MODELS.get(document_type, ExtractionGenerale)
 
-            if not extraction_prompt:
-                logger.warning(f"Pas de prompt d'extraction trouvé pour le type: {document_type}")
-                return {
-                    "success": False,
-                    "error": f"Pas de prompt d'extraction trouvé pour: {document_type}",
-                    "extracted_data": None,
-                    "confidence": 0.0,
-                    "processing_time": (datetime.now() - start_time).total_seconds()
-                }
-
-            # Créer un nouveau prompt template pour l'extraction
+            # Créer le prompt d'extraction avec le modèle Pydantic
             extraction_template = ChatPromptTemplate.from_messages([
-                ("system", extraction_prompt),
-                ("user", """Voici le texte du document à analyser:
+                ("system", f"""Tu es un expert en extraction d'informations pour les documents de type "{document_type}".
+Analyse attentivement le texte fourni et extrais TOUTES les informations pertinentes demandées par le schéma.
+
+Instructions importantes:
+- Extrais les informations précisément comme elles apparaissent dans le document
+- Si une information n'est pas trouvée dans le document, utilise "Non spécifié"
+- Sois précis et exhaustif dans ton extraction
+- Le format de sortie sera automatiquement validé par le système Pydantic"""),
+                ("user", """Texte du document à analyser:
 
 {text}
 
-Analyse ce document et extrait les informations demandées en retournant UNIQUEMENT un JSON valide avec les champs spécifiés.
-Important:
-- Retourne UNIQUEMENT le JSON, sans autre texte
-- Si une information n'est pas trouvée, mets "Non spécifié" comme valeur
-- Structure clairement les données hiérarchiques si nécessaire""")
+Extrais toutes les informations pertinentes de ce document en utilisant le schéma {model_name}.""")
             ])
 
-            # Créer la chaîne d'extraction
+            # Créer la chaîne d'extraction avec sortie structurée Pydantic
             if not self.llm:
                 logger.error("LLM non initialisé pour l'extraction")
                 return {
@@ -339,24 +334,95 @@ Important:
                     "processing_time": (datetime.now() - start_time).total_seconds()
                 }
 
-            extraction_chain = extraction_template | self.llm
+            # Créer la chaîne avec le modèle Pydantic
+            extraction_chain = extraction_template | self.llm.with_structured_output(extraction_model)
 
-            # Limiter la longueur du texte
-            truncated_text = text[:12000]  # Limite plus grande pour l'extraction
+            # Limiter la longueur du texte pour éviter les limites de l'API
+            truncated_text = text[:12000]
 
-            logger.info(f"🔍 Extraction des données pour: {document_type}")
+            logger.info(f"🔍 Extraction structurée pour: {document_type} (modèle: {extraction_model.__name__})")
 
-            # Invoquer le LLM pour l'extraction
-            response = await extraction_chain.ainvoke({
-                "text": truncated_text
+            # Invoquer la chaîne d'extraction
+            result = await extraction_chain.ainvoke({
+                "text": truncated_text,
+                "model_name": extraction_model.__name__
             })
 
-            # Extraire le contenu de la réponse
-            content = response.content
+            # Convertir le résultat en dictionnaire
+            extracted_dict = result.model_dump()
 
-            # Tenter de parser le JSON
+            # Créer le résultat final avec métadonnées
+            final_result = {
+                "document_type": document_type,
+                "category": self.categories.get(document_type, "Autre"),
+                "extracted_fields": extracted_dict,
+                "extraction_model": extraction_model.__name__,
+                "extraction_timestamp": datetime.now().isoformat(),
+                "confidence": 0.9
+            }
+
+            processing_time = (datetime.now() - start_time).total_seconds()
+            logger.info(f"✅ Extraction structurée réussie pour: {document_type}")
+
+            # Encoder en JSON formaté pour une meilleure lisibilité
+            formatted_json = json.dumps(final_result, indent=2, ensure_ascii=False)
+
+            return {
+                "success": True,
+                "extracted_data": formatted_json,
+                "confidence": 0.9,  # Haute confiance avec Pydantic
+                "processing_time": processing_time,
+                "llm_used": "magistral-medium-latest",
+                "normalized_result": final_result  # Ajout du résultat normalisé pour une utilisation directe
+            }
+
+        except Exception as e:
+            # Limiter la taille du message d'erreur pour éviter les logs trop longs
+            error_message = str(e)
+            if len(error_message) > 500:
+                error_message = error_message[:500] + "... [tronqué]"
+
+            # Nettoyer l'erreur pour éviter les problèmes de formatage dans les logs
+            import re
+            # Supprimer les caractères de contrôle et les nouvelles lignes excessives
+            error_message = re.sub(r'[\r\n]+', ' | ', error_message)
+            error_message = re.sub(r'\s+', ' ', error_message)
+
+            logger.error(f"❌ Erreur lors de l'extraction structurée: {error_message}")
+
+            # Fallback simple si Pydantic échoue
             try:
-                # Nettoyer la réponse pour obtenir un JSON pur
+                logger.info("🔄 Tentative de fallback simple...")
+
+                # Utiliser un modèle simple comme fallback
+                fallback_template = ChatPromptTemplate.from_messages([
+                    ("system", f"Tu es un assistant expert pour les documents de type '{document_type}'. Extrais les informations principales du document fourni et retourne-les dans un format JSON simple avec les champs les plus importants."),
+                    ("user", f"Texte à analyser:\n\n{{text}}\n\nExtrais les informations principales et retourne-les en JSON.")
+                ])
+
+                fallback_chain = fallback_template | self.llm
+                response = await fallback_chain.ainvoke({
+                    "text": text[:8000]
+                })
+
+                # Récupérer le contenu de la réponse de manière robuste
+                content = ""
+                if hasattr(response, 'content'):
+                    if isinstance(response.content, list):
+                        # Si c'est une liste, prendre le premier élément avec du contenu
+                        for item in response.content:
+                            if isinstance(item, dict) and 'text' in item:
+                                content += item['text']
+                            elif isinstance(item, str):
+                                content += item
+                    elif isinstance(response.content, str):
+                        content = response.content
+                elif hasattr(response, 'text'):
+                    content = response.text
+                else:
+                    content = str(response)
+
+                # Nettoyer le contenu
                 content = content.strip()
                 if content.startswith("```json"):
                     content = content[7:]
@@ -364,57 +430,47 @@ Important:
                     content = content[:-3]
                 content = content.strip()
 
-                # Parser le JSON
-                extracted_data = json.loads(content)
+                # Corrections simples pour JSON
+                content = content.replace("'", '"')
+                import re
+                content = re.sub(r',(\s*[}\]])', r'\1', content)
 
-                # Créer un résultat structuré
-                result = {
+                fallback_data = json.loads(content)
+
+                fallback_result = {
                     "document_type": document_type,
-                    "extracted_fields": extracted_data,
-                    "extraction_timestamp": datetime.now().isoformat()
+                    "extracted_fields": fallback_data,
+                    "extraction_model": "fallback_simple",
+                    "extraction_timestamp": datetime.now().isoformat(),
+                    "fallback_reason": str(e)
                 }
 
                 processing_time = (datetime.now() - start_time).total_seconds()
-                logger.info(f"✅ Extraction réussie pour: {document_type}")
+                logger.info(f"✅ Extraction fallback réussie pour: {document_type}")
+
+                # Encoder en JSON formaté pour une meilleure lisibilité
+                formatted_json = json.dumps(fallback_result, indent=2, ensure_ascii=False)
 
                 return {
                     "success": True,
-                    "extracted_data": json.dumps(result),
-                    "confidence": 0.8,  # Confiance par défaut pour l'extraction
+                    "extracted_data": formatted_json,
+                    "confidence": 0.5,  # Confiance plus basse pour le fallback
                     "processing_time": processing_time,
-                    "llm_used": "mistral-large-latest"
+                    "llm_used": "magistral-medium-latest",
+                    "warning": "Extraction via fallback simple",
+                    "normalized_result": fallback_result  # Ajout du résultat normalisé pour une utilisation directe
                 }
 
-            except json.JSONDecodeError as e:
-                logger.error(f"❌ Erreur parsing JSON extraction: {e}")
-                logger.error(f"Contenu reçu: {content[:200]}...")
-
-                # Fallback: tenter d'extraire manuellement
-                fallback_data = {
-                    "document_type": document_type,
-                    "raw_response": content,
-                    "extraction_timestamp": datetime.now().isoformat(),
-                    "parsing_error": str(e)
-                }
+            except Exception as fallback_error:
+                logger.error(f"❌ Fallback échoué: {fallback_error}")
 
                 return {
                     "success": False,
-                    "error": f"Erreur parsing JSON: {str(e)}",
-                    "extracted_data": json.dumps(fallback_data),
-                    "confidence": 0.2,
-                    "processing_time": (datetime.now() - start_time).total_seconds(),
-                    "llm_used": "mistral-large-latest"
+                    "error": f"Extraction échouée: {str(e)} (fallback: {str(fallback_error)})",
+                    "extracted_data": None,
+                    "confidence": 0.0,
+                    "processing_time": (datetime.now() - start_time).total_seconds()
                 }
-
-        except Exception as e:
-            logger.error(f"❌ Erreur lors de l'extraction: {e}")
-            return {
-                "success": False,
-                "error": str(e),
-                "extracted_data": None,
-                "confidence": 0.0,
-                "processing_time": (datetime.now() - start_time).total_seconds()
-            }
 
     async def process_document_complete(self, text: str) -> Dict[str, any]:
         """

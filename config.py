@@ -19,7 +19,7 @@ class Config:
 
     # Configuration Mistral
     MISTRAL_API_KEY: Optional[str] = os.getenv("MISTRAL_API_KEY")
-    MISTRAL_MODEL: str = os.getenv("MISTRAL_MODEL", "mistral-large-latest")
+    MISTRAL_MODEL: str = os.getenv("MISTRAL_MODEL", "magistral-medium-latest")
 
     # Configuration base de données
     DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///documents.db")

@@ -20,7 +20,7 @@ The application analyzes uploaded documents (PDFs or images), extracts their tex
 - **Mistral AI**:
   - OCR service for image-based text extraction
   - LLM service for document classification
-  - Uses `mistral-ocr-latest` and `mistral-large-latest` models
+  - Uses `mistral-ocr-latest` and `magistral-medium-latest` models
 
 ### Document Processing
 - **PDF Support**:
@@ -66,7 +66,7 @@ DEBUG=false
 
 # Mistral API Configuration (Required)
 MISTRAL_API_KEY=your_api_key_here
-MISTRAL_MODEL=mistral-large-latest
+MISTRAL_MODEL=magistral-medium-latest
 
 # Database Configuration
 DATABASE_URL=sqlite:///documents.db
@@ -78,11 +78,13 @@ MAX_FILE_SIZE=50  # MB
 
 ### Key Dependencies (pyproject.toml)
 - **FastAPI**: Web framework
+- **LangChain**: LLM orchestration framework with Mistral integration
 - **MistralAI**: API client for OCR and LLM services
 - **PDF2Image**: PDF to image conversion for OCR
 - **pdfminer-six**: PDF text extraction
 - **Pillow**: Image processing
 - **PyPDF2**: PDF manipulation
+- **Pydantic**: Data validation and structured models
 - **python-dotenv**: Environment variable management
 - **python-multipart**: File upload support
 - **uvicorn**: ASGI server
@@ -166,24 +168,33 @@ cd synthese-carte-financement
 uv sync
 
 # Configure environment
-cp .env.example .env  # If available, or create .env
-# Add MISTRAL_API_KEY
+# Create .env file with MISTRAL_API_KEY (required)
+echo "MISTRAL_API_KEY=your_api_key_here" > .env
 
 # Start development server
 uv run python main.py
 ```
 
-### 2. Testing
-Currently no automated test suite exists. Manual testing via API endpoints is recommended.
-
-### 3. Running in Production
+### 2. Development Commands
 ```bash
-# Production server
+# Start development server with auto-reload
+uv run python main.py
+
+# Start with uvicorn directly
 uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 
-# Or with debug mode
-uv run python main.py --reload
+# Production server
+uvicorn main:app --host 0.0.0.0 --port 8000
 ```
+
+### 3. Testing
+Currently no automated test suite exists. Manual testing via API endpoints is recommended.
+
+### Common Development Tasks
+- **Check API health**: `curl http://localhost:8000/health`
+- **Upload document**: `curl -X POST -F "file=@document.pdf" http://localhost:8000/upload`
+- **List documents**: `curl http://localhost:8000/documents`
+- **View document types**: `curl http://localhost:8000/document-types`
 
 ## Performance Characteristics
 
