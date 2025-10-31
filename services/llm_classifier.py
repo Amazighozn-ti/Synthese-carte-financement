@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 import logging
 from datetime import datetime
 
-from langchain_mistralai import ChatMistralAI
+from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.exceptions import OutputParserException
 from models.schemas import (
@@ -24,39 +24,51 @@ class LLMClassifier:
     """Classe pour classifier les documents en utilisant LangChain et Mistral LLM"""
 
     def __init__(self):
-        """Initialiser le client LangChain avec Mistral"""
-        self.api_key = os.getenv('MISTRAL_API_KEY')
+        """Initialiser le client LangChain avec OpenAI"""
+        self.api_key = os.getenv('OPENAI_API_KEY')
         if not self.api_key:
-            logger.warning("MISTRAL_API_KEY non trouvé dans les variables d'environnement")
+            logger.warning("OPENAI_API_KEY non trouvé dans les variables d'environnement")
 
-        # Initialiser le modèle LangChain avec Mistral
-        self.llm = ChatMistralAI(
+        # Initialiser le modèle LangChain avec OpenAI
+        self.llm = ChatOpenAI(
             api_key=self.api_key,
-            model="magistral-medium-latest",
+            model="gpt-4.1-mini",
             temperature=0.1  # Température basse pour plus de cohérence
         ) if self.api_key else None
 
         # Créer le template de prompt structuré
         self.prompt = ChatPromptTemplate.from_messages([
             ("system", """Tu es un expert en classification de documents administratifs et financiers français.
-Analyse attentivement le texte fourni et identifie LE TYPE EXACT parmi la liste fournie.
 
-IMPORTANT: Tu dois OBLIGATOIREMENT choisir un type de document dans la liste exacte fournie. Ne propose jamais un type qui n'est pas dans cette liste.
-Si aucun type ne correspond parfaitement, choisis "Autre" dans la catégorie appropriée.
+MISSION: Analyse le document et identifie LE TYPE LE PLUS PRÉCIS possible.
 
-Sois précis et cohérent dans ta classification et fournis un score de confiance réaliste (0.0 à 1.0)."""),
+RÈGLES CRITIQUES:
+1. Tu DOIS choisir un type dans la liste - JAMAIS "Autre" sauf si VRAIMENT aucune correspondance
+2. Pour un KBIS → "KBIS société emprunteur"
+3. Pour un bilan comptable → "Bilans, Liasses fiscales"
+4. Pour un avis d'imposition → "Avis d'imposition"
+5. Pour un devis → "Devis"
+6. Pour un avis de valeur → "Avis de valeur" (si disponible) sinon proche
+7. Analyse TOUS les mots-clés du document
+
+EXEMPLES:
+- "extrait Kbis" → "KBIS société emprunteur"
+- "bilan comptable société" → "Bilans, Liasses fiscales"
+- "revenu fiscal" → "Avis d'imposition"
+
+Sois exhaustif dans l'analyse. Score de confiance réaliste (0.0 à 1.0)."""),
             ("user", """Texte à analyser:
 {text}
 
-Types de documents disponibles (CHOISIR OBLIGATOIREMENT DANS CETTE LISTE):
+Types disponibles:
 {document_types}
 
-Identifie le type de document EXACT qui correspond le mieux.""")
+QUEL EST LE TYPE EXACT LE PLUS PRÉCIS pour ce document?""")
         ])
 
         # Créer la chaîne avec sortie structurée
         if self.llm:
-            self.chain = self.prompt | self.llm.with_structured_output(DocumentClassification)
+            self.chain = self.prompt | self.llm.with_structured_output(DocumentClassification, method="function_calling")
         else:
             self.chain = None
 
@@ -121,15 +133,13 @@ Identifie le type de document EXACT qui correspond le mieux.""")
                 "document_types": document_types_str
             })
 
-            # Valider que le type est bien dans la liste (juste pour vérification)
-            if result.document_type not in self.document_types:
-                logger.warning(f"❌ Le LLM a proposé un type non valide: {result.document_type}")
-                # Chercher le "Autre" approprié
-                for doc_type in self.document_types:
-                    if "autre" in doc_type.lower():
-                        result.document_type = doc_type
-                        result.category = self.categories.get(doc_type, "Autre")
-                        break
+            # Valider et corriger le type si nécessaire
+            if result.document_type not in self.document_types or "autre" in result.document_type.lower():
+                logger.info(f"🔄 Classification à améliorer: {result.document_type}")
+                # Forcer une meilleure classification avec validation stricte
+                improved_result = self._strict_validation_and_reclassification(truncated_text, result.document_type)
+                if improved_result:
+                    result = improved_result
 
             processing_time = (datetime.now() - start_time).total_seconds()
 
@@ -188,6 +198,59 @@ Identifie le type de document EXACT qui correspond le mieux.""")
             result.confidence = 0.5  # Valeur par défaut
 
         return result
+
+    def _strict_validation_and_reclassification(self, text: str, initial_type: str) -> Optional[DocumentClassification]:
+        """
+        Reclassifie de manière stricte si le type initial n'est pas satisfaisant
+        """
+        try:
+            # Créer un prompt plus strict pour forcer une meilleure classification
+            strict_prompt = ChatPromptTemplate.from_messages([
+                ("system", """Tu dois classifier ce document avec PRÉCISION MAXIMALE.
+
+RÈGLES ABSOLUES:
+1. JAMAIS "Autre" - Trouve TOUJOURS le bon type dans la liste
+2. Analyse TOUS les mots-clés (société, bilan, Kbis, avis, facture, etc.)
+3. Cherche les indices: "SARL", "SAS", "revenu", "bilan", "chiffre affaires"
+
+EXEMPLES CONCRETS:
+- "extrait Kbis, registre du commerce" → "KBIS société emprunteur"
+- "bilan comptable 2023, compte de résultat" → "Bilans, Liasses fiscales"
+- "avis d'imposition 2023, DGFiP" → "Avis d'imposition"
+- "devis travaux, entreprise" → "Devis"
+
+Si tu vois "KBIS", choisis OBLIGATOIREMENT "KBIS société emprunteur"
+Si tu vois "bilan" + "société", choisis OBLIGATOIREMENT "Bilans, Liasses fiscales"
+
+ILI FAUT CHOISIR LE TYPE EXACT LE PLUS PRÉCIS!"""),
+                ("user", """Types disponibles:
+{document_types}
+
+Texte:
+{text}
+
+TYPE EXACT (UNE SEULE LIGNE):""")
+            ])
+
+            if not self.llm:
+                return None
+
+            chain = strict_prompt | self.llm.with_structured_output(DocumentClassification, method="function_calling")
+
+            document_types_str = "\n".join([f"- {doc_type}" for doc_type in self.document_types])
+
+            # Appel direct (plus simple et fiable)
+            result = chain.invoke({"text": text, "document_types": document_types_str})
+
+            # Valider et retourner le résultat
+            if result and result.document_type in self.document_types:
+                logger.info(f"✅ Reclassification réussie: {result.document_type}")
+                return result
+            return None
+
+        except Exception as e:
+            logger.warning(f"❌ Erreur reclassification: {str(e)}")
+            return None
 
     def _find_closest_match(self, document_type: str) -> str:
         """
@@ -335,7 +398,7 @@ Extrais toutes les informations pertinentes de ce document en utilisant le sché
                 }
 
             # Créer la chaîne avec le modèle Pydantic
-            extraction_chain = extraction_template | self.llm.with_structured_output(extraction_model)
+            extraction_chain = extraction_template | self.llm.with_structured_output(extraction_model, method="function_calling")
 
             # Limiter la longueur du texte pour éviter les limites de l'API
             truncated_text = text[:12000]
@@ -372,7 +435,7 @@ Extrais toutes les informations pertinentes de ce document en utilisant le sché
                 "extracted_data": formatted_json,
                 "confidence": 0.9,  # Haute confiance avec Pydantic
                 "processing_time": processing_time,
-                "llm_used": "magistral-medium-latest",
+                "llm_used": "gpt-4.1-mini",
                 "normalized_result": final_result  # Ajout du résultat normalisé pour une utilisation directe
             }
 
@@ -390,87 +453,14 @@ Extrais toutes les informations pertinentes de ce document en utilisant le sché
 
             logger.error(f"❌ Erreur lors de l'extraction structurée: {error_message}")
 
-            # Fallback simple si Pydantic échoue
-            try:
-                logger.info("🔄 Tentative de fallback simple...")
-
-                # Utiliser un modèle simple comme fallback
-                fallback_template = ChatPromptTemplate.from_messages([
-                    ("system", f"Tu es un assistant expert pour les documents de type '{document_type}'. Extrais les informations principales du document fourni et retourne-les dans un format JSON simple avec les champs les plus importants."),
-                    ("user", f"Texte à analyser:\n\n{{text}}\n\nExtrais les informations principales et retourne-les en JSON.")
-                ])
-
-                fallback_chain = fallback_template | self.llm
-                response = await fallback_chain.ainvoke({
-                    "text": text[:8000]
-                })
-
-                # Récupérer le contenu de la réponse de manière robuste
-                content = ""
-                if hasattr(response, 'content'):
-                    if isinstance(response.content, list):
-                        # Si c'est une liste, prendre le premier élément avec du contenu
-                        for item in response.content:
-                            if isinstance(item, dict) and 'text' in item:
-                                content += item['text']
-                            elif isinstance(item, str):
-                                content += item
-                    elif isinstance(response.content, str):
-                        content = response.content
-                elif hasattr(response, 'text'):
-                    content = response.text
-                else:
-                    content = str(response)
-
-                # Nettoyer le contenu
-                content = content.strip()
-                if content.startswith("```json"):
-                    content = content[7:]
-                if content.endswith("```"):
-                    content = content[:-3]
-                content = content.strip()
-
-                # Corrections simples pour JSON
-                content = content.replace("'", '"')
-                import re
-                content = re.sub(r',(\s*[}\]])', r'\1', content)
-
-                fallback_data = json.loads(content)
-
-                fallback_result = {
-                    "document_type": document_type,
-                    "extracted_fields": fallback_data,
-                    "extraction_model": "fallback_simple",
-                    "extraction_timestamp": datetime.now().isoformat(),
-                    "fallback_reason": str(e)
-                }
-
-                processing_time = (datetime.now() - start_time).total_seconds()
-                logger.info(f"✅ Extraction fallback réussie pour: {document_type}")
-
-                # Encoder en JSON formaté pour une meilleure lisibilité
-                formatted_json = json.dumps(fallback_result, indent=2, ensure_ascii=False)
-
-                return {
-                    "success": True,
-                    "extracted_data": formatted_json,
-                    "confidence": 0.5,  # Confiance plus basse pour le fallback
-                    "processing_time": processing_time,
-                    "llm_used": "magistral-medium-latest",
-                    "warning": "Extraction via fallback simple",
-                    "normalized_result": fallback_result  # Ajout du résultat normalisé pour une utilisation directe
-                }
-
-            except Exception as fallback_error:
-                logger.error(f"❌ Fallback échoué: {fallback_error}")
-
-                return {
-                    "success": False,
-                    "error": f"Extraction échouée: {str(e)} (fallback: {str(fallback_error)})",
-                    "extracted_data": None,
-                    "confidence": 0.0,
-                    "processing_time": (datetime.now() - start_time).total_seconds()
-                }
+            # Ne pas utiliser de fallback - remonter l'erreur directement
+            return {
+                "success": False,
+                "error": f"Extraction échouée: {str(e)}",
+                "extracted_data": None,
+                "confidence": 0.0,
+                "processing_time": (datetime.now() - start_time).total_seconds()
+            }
 
     async def process_document_complete(self, text: str) -> Dict[str, any]:
         """

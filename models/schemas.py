@@ -260,8 +260,8 @@ class ExtractionGenerale(BaseModel):
     date_document: Optional[str] = Field(default="Non spécifié", description="Date du document si présente")
     emetteur: Optional[str] = Field(default="Non spécifié", description="Organisme ou personne qui a émis le document")
     destinataire: Optional[str] = Field(default="Non spécifié", description="Personne ou entité destinataire")
-    informations_principales: Dict[str, Any] = Field(description="Informations principales extraites du document")
-    details_supplementaires: Dict[str, Any] = Field(description="Détails supplémentaires pertinents")
+    informations_principales: str = Field(description='Informations principales extraites sous forme de chaîne JSON. Exemple: \'{"clé1": "valeur1", "clé2": "valeur2"}\'')
+    details_supplementaires: str = Field(description='Détails supplémentaires pertinents sous forme de chaîne JSON. Exemple: \'{"cléA": "valeurA", "cléB": "valeurB"}\'')
     resume: Optional[str] = Field(default="Non spécifié", description="Résumé du contenu du document")
 
     class Config:
@@ -272,14 +272,8 @@ class ExtractionGenerale(BaseModel):
                 "date_document": "15/03/2024",
                 "emetteur": "Mairie du 11ème arrondissement",
                 "destinataire": "Jean DUPONT",
-                "informations_principales": {
-                    "statut": "Résident depuis 5 ans",
-                    "adresse_confirmee": "63 Rue de Ménilmontant"
-                },
-                "details_supplementaires": {
-                    "numéro_attestation": "ATT-2024-01234",
-                    "validité": "6 mois"
-                },
+                "informations_principales": '{"statut": "Résident depuis 5 ans", "adresse_confirmee": "63 Rue de Ménilmontant"}',
+                "details_supplementaires": '{"numéro_attestation": "ATT-2024-01234", "validité": "6 mois"}',
                 "resume": "Attestation de résidence confirmant l'adresse de Jean DUPONT"
             }
         }
