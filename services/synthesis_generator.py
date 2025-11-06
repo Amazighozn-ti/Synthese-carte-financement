@@ -89,15 +89,35 @@ class SynthesisGenerator:
         logger.info(f"📦 [EXTRACTIONS] Données formatées: {len(json.dumps(all_extractions, ensure_ascii=False))} caractères pour extractions, {sum(len(text) for text in raw_texts.values())} caractères pour textes bruts")
         return result
 
-    def _create_section_prompt(self, section: str, extractions_data: Dict) -> str:
+    def _create_section_prompt(self, section: str, extractions_data: Dict, custom_prompt: Optional[str] = None) -> str:
         """
         Créer un prompt spécifique pour chaque section de la Carte de Financement
+
+        Args:
+            section: Nom de la section à générer
+            extractions_data: Données extraites des documents
+            custom_prompt: Instructions personnalisées à intégrer dans le prompt
         """
         extractions_json = json.dumps(extractions_data["extractions"], indent=2, ensure_ascii=False)
         raw_texts_str = "\n\n".join([f"Document: {info['filename']} (Type: {info['type']})\nContenu: {info['text'][:2000]}..." for info in extractions_data["raw_texts"].values()])
 
+        # Fonction helper pour ajouter les instructions personnalisées
+        def add_custom_instructions(base_prompt: str) -> str:
+            if custom_prompt:
+                custom_section = f"""
+
+{'='*80}
+INSTRUCTIONS PERSONNALISÉES:
+{custom_prompt}
+{'='*80}
+
+Appliquez ces instructions personnalisées lors de la génération de cette section, en plus des instructions de base ci-dessus.
+"""
+                return base_prompt + custom_section
+            return base_prompt
+
         if section == "synthese_projet":
-            return f"""Tu es un expert financier. Génère la synthèse du projet à partir des données suivantes :
+            base_prompt = f"""Tu es un expert financier. Génère la synthèse du projet à partir des données suivantes :
 
 Données extraites des documents :
 {extractions_json}
@@ -111,16 +131,17 @@ Ne laisse AUCUN champ vide, fais des inférences si nécessaire basées sur les 
 
 Voici les champs à remplir :
 - description: Description complète du projet immobilier ou professionnel
-- objectif_financement: Objectif principal du financement  
+- objectif_financement: Objectif principal du financement
 - lieu: Lieu du projet (ville, département)
 - montant_total: Montant total du projet en euros
 - duree: Durée du projet ou du financement
 - garanties: Garanties prévues
 
 Réponds UNIQUEMENT avec le JSON valide pour la section 'synthese_projet' selon le modèle Pydantic."""
+            return add_custom_instructions(base_prompt)
 
         elif section == "profil_emprunteur":
-            return f"""Tu es un expert financier. Génère le profil de l'emprunteur à partir des données suivantes :
+            base_prompt = f"""Tu es un expert financier. Génère le profil de l'emprunteur à partir des données suivantes :
 
 Données extraites des documents :
 {extractions_json}
@@ -140,9 +161,10 @@ Voici les champs à remplir :
 - enfants_a_charge: Nombre et âge des enfants à charge
 
 Réponds UNIQUEMENT avec le JSON valide pour la section 'profil_emprunteur' selon le modèle Pydantic."""
+            return add_custom_instructions(base_prompt)
 
         elif section == "revenus":
-            return f"""Tu es un expert financier. Génère les revenus de l'emprunteur à partir des données suivantes :
+            base_prompt = f"""Tu es un expert financier. Génère les revenus de l'emprunteur à partir des données suivantes :
 
 Données extraites des documents :
 {extractions_json}
@@ -175,9 +197,10 @@ INCLUSIONS SPECIFIQUES:
 - Comparaison entre revenus déclarés et revenus professionnels
 
 Réponds UNIQUEMENT avec le JSON valide pour la section 'revenus' selon le modèle Pydantic."""
+            return add_custom_instructions(base_prompt)
 
         elif section == "patrimoine_immobilier":
-            return f"""Tu es un expert financier. Génère le patrimoine immobilier à partir des données suivantes :
+            base_prompt = f"""Tu es un expert financier. Génère le patrimoine immobilier à partir des données suivantes :
 
 Données extraites des documents :
 {extractions_json}
@@ -208,9 +231,10 @@ INCLUSIONS SPECIFIQUES:
 - Répartition du patrimoine immobilier par type de bien
 
 Réponds UNIQUEMENT avec le JSON valide pour la section 'patrimoine_immobilier' selon le modèle Pydantic."""
+            return add_custom_instructions(base_prompt)
 
         elif section == "patrimoine_mobilier":
-            return f"""Tu es un expert financier. Génère le patrimoine mobilier à partir des données suivantes :
+            base_prompt = f"""Tu es un expert financier. Génère le patrimoine mobilier à partir des données suivantes :
 
 Données extraites des documents :
 {extractions_json}
@@ -230,9 +254,10 @@ Voici les champs à remplir :
 - patrimoine_mobilier_total: Total patrimoine mobilier en euros
 
 Réponds UNIQUEMENT avec le JSON valide pour la section 'patrimoine_mobilier' selon le modèle Pydantic."""
+            return add_custom_instructions(base_prompt)
 
         elif section == "societes":
-            return f"""Tu es un expert financier. Génère les informations sur les sociétés à partir des données suivantes :
+            base_prompt = f"""Tu es un expert financier. Génère les informations sur les sociétés à partir des données suivantes :
 
 Données extraites des documents :
 {extractions_json}
@@ -254,7 +279,7 @@ Voici les champs à remplir pour chaque société :
 - fonds_propres: Fonds propres en euros
 - activite: Description de l'activité principale
 
-ATTENTION: 
+ATTENTION:
 - Si plusieurs sociétés sont identifiées, renvoie une liste de toutes les sociétés
 - Utilise des données spécifiques des bilans et liasses fiscales pour les indicateurs financiers
 - Identifie les sociétés à partir des documents KBIS et Statuts
@@ -266,9 +291,10 @@ DONNEES SPECIFIQUES A RECHERCHER:
 - Pour les détails de propriété: cherche dans les documents associés aux associés
 
 Réponds UNIQUEMENT avec le JSON valide pour la section 'societes' selon le modèle Pydantic."""
+            return add_custom_instructions(base_prompt)
 
         elif section == "plan_financement":
-            return f"""Tu es un expert financier. Génère le plan de financement à partir des données suivantes :
+            base_prompt = f"""Tu es un expert financier. Génère le plan de financement à partir des données suivantes :
 
 Données extraites des documents :
 {extractions_json}
@@ -301,9 +327,10 @@ INCLUSIONS SPECIFIQUES:
 - Détail des sources et utilisations de fonds
 
 Réponds UNIQUEMENT avec le JSON valide pour la section 'plan_financement' selon le modèle Pydantic."""
+            return add_custom_instructions(base_prompt)
 
         elif section == "analyse_financiere":
-            return f"""Tu es un expert financier. Génère l'analyse financière à partir des données suivantes :
+            base_prompt = f"""Tu es un expert financier. Génère l'analyse financière à partir des données suivantes :
 
 Données extraites des documents :
 {extractions_json}
@@ -336,13 +363,19 @@ INCLUSIONS SPECIFIQUES:
 - Notation du risque (ex: faible/moyen/élevé) avec justification
 
 Réponds UNIQUEMENT avec le JSON valide pour la section 'analyse_financiere' selon le modèle Pydantic."""
+            return add_custom_instructions(base_prompt)
 
-    async def _generate_section(self, section: str, extractions_data: Dict) -> Optional[Dict]:
+    async def _generate_section(self, section: str, extractions_data: Dict, custom_prompt: Optional[str] = None) -> Optional[Dict]:
         """
         Générer une section spécifique de la Carte de Financement
+
+        Args:
+            section: Nom de la section à générer
+            extractions_data: Données extraites des documents
+            custom_prompt: Instructions personnalisées à intégrer dans le prompt
         """
         logger.info(f"📝 [SECTION-{section.upper()}] Création du prompt pour la section {section}...")
-        prompt = self._create_section_prompt(section, extractions_data)
+        prompt = self._create_section_prompt(section, extractions_data, custom_prompt)
         logger.info(f"✅ [SECTION-{section.upper()}] Prompt créé ({len(prompt)} caractères)")
 
         # Créer le template
@@ -457,9 +490,13 @@ Réponds UNIQUEMENT avec le JSON valide pour la section 'analyse_financiere' sel
                 empty_model = model_mapping[section]()
                 return empty_model.model_dump() if hasattr(empty_model, 'model_dump') else {}
 
-    async def generate_synthesis(self, document_ids: List[int]) -> Dict:
+    async def generate_synthesis(self, document_ids: List[int], custom_prompt: Optional[str] = None) -> Dict:
         """
         Générer la synthèse à partir des documents avec des appels LLM séparés pour chaque section
+
+        Args:
+            document_ids: Liste des IDs des documents à analyser
+            custom_prompt: Instructions personnalisées pour enrichir la génération
         """
         import sqlite3  # Ajout de l'import nécessaire
         
@@ -485,7 +522,7 @@ Réponds UNIQUEMENT avec le JSON valide pour la section 'analyse_financiere' sel
             # Générer chaque section
             for section in sections:
                 logger.info(f"🔄 [SYNTHESE] Génération de la section: {section}")
-                section_data = await self._generate_section(section, extractions_data)
+                section_data = await self._generate_section(section, extractions_data, custom_prompt)
                 
                 if section == "societes":
                     # La section societes doit toujours être une liste
@@ -538,15 +575,19 @@ Réponds UNIQUEMENT avec le JSON valide pour la section 'analyse_financiere' sel
                 "error": str(e)
             }
 
-    async def generate_complete_synthesis(self, document_ids: List[int]) -> Dict:
+    async def generate_complete_synthesis(self, document_ids: List[int], custom_prompt: Optional[str] = None) -> Dict:
         """
         Générer la synthèse complète (JSON + Document Word)
+
+        Args:
+            document_ids: Liste des IDs des documents à analyser
+            custom_prompt: Instructions personnalisées pour enrichir la génération
         """
         logger.info(f"🚀 [SYNTHESE-COMPLETE] Début génération complète pour {len(document_ids)} documents")
         try:
             # Générer la synthèse
             logger.info(f"📄 [SYNTHESE-COMPLETE] Étape 1/2: Génération de la synthèse...")
-            synthese_result = await self.generate_synthesis(document_ids)
+            synthese_result = await self.generate_synthesis(document_ids, custom_prompt)
 
             if not synthese_result["success"]:
                 logger.error(f"❌ [SYNTHESE-COMPLETE] Échec génération synthèse")

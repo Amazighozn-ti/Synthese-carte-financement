@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse, FileResponse
 import os
 import shutil
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 from database import init_database, insert_document, get_documents
 from services.document_processor import DocumentProcessor
@@ -77,12 +77,13 @@ async def upload_document(file: UploadFile = File(...)):
     Endpoint pour téléverser et classifier un document (compatibilité ascendante)
     """
     files = [file]
-    return await process_multiple_files(files)
+    return await process_multiple_files(files, custom_synthesis_prompt=None)
 
 @app.post("/upload-multiple")
 async def upload_multiple_documents(
     files: List[UploadFile] = File(...),
-    generate_synthesis: bool = Query(False)
+    generate_synthesis: bool = Query(False),
+    custom_synthesis_prompt: Optional[str] = Query(None, description="Instructions personnalisées pour enrichir la génération de synthèse")
 ):
     """
     Endpoint pour téléverser, classifier, extraire et générer une synthèse de financement
@@ -90,22 +91,24 @@ async def upload_multiple_documents(
     Args:
         files: Liste des fichiers à traiter
         generate_synthesis: Si True, génère une Carte de Financement après traitement
+        custom_synthesis_prompt: Instructions personnalisées qui seront intégrées dans tous les prompts de génération des sections
     """
-    if len(files) > 20:  # Limite raisonnable pour éviter la surcharge
+    if len(files) > 50:  # Limite raisonnable pour éviter la surcharge
         raise HTTPException(
             status_code=400,
-            detail="Maximum 20 fichiers autorisés par requête"
+            detail="Maximum 50 fichiers autorisés par requête"
         )
 
-    return await process_multiple_files(files, generate_synthesis)
+    return await process_multiple_files(files, generate_synthesis, custom_synthesis_prompt)
 
-async def process_multiple_files(files: List[UploadFile], generate_synthesis: bool = False):
+async def process_multiple_files(files: List[UploadFile], generate_synthesis: bool = False, custom_synthesis_prompt: Optional[str] = None):
     """
     Traiter plusieurs fichiers (upload simple ou multiple) avec génération de synthèse optionnelle
 
     Args:
         files: Liste des fichiers à traiter
         generate_synthesis: Si True, génère une Carte de Financement après traitement
+        custom_synthesis_prompt: Instructions personnalisées pour enrichir la génération de synthèse
     """
     global document_processor, llm_classifier, synthesis_generator
 
@@ -264,7 +267,7 @@ async def process_multiple_files(files: List[UploadFile], generate_synthesis: bo
 
                 try:
                     # Générer la synthèse complète via le service (JSON + Word)
-                    complete_result = await synthesis_generator.generate_complete_synthesis(successful_document_ids)
+                    complete_result = await synthesis_generator.generate_complete_synthesis(successful_document_ids, custom_synthesis_prompt)
 
                     if complete_result["success"]:
                         response_content["synthesis"] = complete_result["synthese"]
